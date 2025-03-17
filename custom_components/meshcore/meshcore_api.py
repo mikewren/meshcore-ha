@@ -199,6 +199,19 @@ class MeshCoreAPI:
                 # The self_info attribute is updated when appstart is called
                 # We need to make a copy to avoid reference issues
                 self._node_info = self._mesh_core.self_info.copy()
+                
+                # Try to get device firmware info
+                try:
+                    _LOGGER.info("Requesting device firmware and hardware info")
+                    device_info = await self._mesh_core.send_device_query()
+                    if device_info and isinstance(device_info, dict):
+                        _LOGGER.info(f"Device firmware info: version={device_info.get('firmware_version', 'Unknown')}, "
+                                    f"manufacturer={device_info.get('manufacturer_name', 'Unknown')}")
+                        # Merge device info into node info
+                        self._node_info.update(device_info)
+                except Exception as device_ex:
+                    _LOGGER.warning(f"Could not get device info: {device_ex}")
+                
                 return self._node_info
                 
             except Exception as ex:

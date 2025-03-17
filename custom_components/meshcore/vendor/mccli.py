@@ -436,6 +436,21 @@ class MeshCore:
                 self.result.set_result("meshcore://" + data[1:].hex())
             case 12: # battery voltage
                 self.result.set_result(int.from_bytes(data[1:2], byteorder='little'))
+            case 13: # device info response
+                self.log_debug("Received device info response")
+                res = {}
+                res["firmware_ver_code"] = data[1]
+                res["max_contacts"] = data[2] * 2
+                res["max_group_channels"] = data[3]
+                # Skip reserved 4 bytes
+                firmware_build_date = data[8:20].decode().replace("\0", "")
+                res["firmware_build_date"] = firmware_build_date
+                manufacturer_name = data[20:60].decode().replace("\0", "")
+                res["manufacturer_name"] = manufacturer_name
+                firmware_version = data[60:80].decode().replace("\0", "")
+                res["firmware_version"] = firmware_version
+                self.log_debug(f"Firmware version: {firmware_version}, Build date: {firmware_build_date}")
+                self.result.set_result(res)
             # push notifications
             case 0x80:
                 printerr ("Advertisment received")
@@ -535,6 +550,15 @@ class MeshCore:
 
     async def get_bat(self):
         return await self.send(b'\x14')
+        
+    async def send_device_query(self):
+        """ Send device query command to get firmware and hardware info """
+        self.log_debug("Sending device query command")
+        # 22 is CMD_DEVICE_QEURY, 3 is app protocol version (example)
+        query_cmd = bytearray([22, 3])
+        result = await self.send(query_cmd)
+        self.log_debug(f"Device query result: {result}")
+        return result
 
     async def get_time(self):
         """ Get the time (epoch) of the node """
@@ -698,6 +722,9 @@ async def next_cmd(mc, cmds):
     """ process next command """
     argnum = 0
     match cmds[0] :
+        case "device_info" | "info" | "di" :
+            device_info = await mc.send_device_query()
+            print(json.dumps(device_info, indent=4))
         case "get_time" :
             timestamp = await mc.get_time()
             print('Current time :'
@@ -854,6 +881,7 @@ def usage () :
     cmd <name> <cmd>       : sends a command to a repeater (no ack) c 
     req_status <name>      : requests status from a node            rs
     wait_status            : wait and print reply                   ws
+    device_info            : query device firmware and hardware info di
     sleep <secs>           : sleeps for a given amount of secs      s""") 
                         
 async def main(argv):   

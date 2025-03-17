@@ -388,13 +388,20 @@ class MeshCoreSensor(CoordinatorEntity, SensorEntity):
         # Get raw device name for display purposes
         raw_device_name = coordinator.data.get('name', 'Node') if coordinator.data else 'Node'
         
+        # Add public key to device name if available
+        device_name = f"MeshCore {raw_device_name}"
+        if coordinator.data and "public_key" in coordinator.data:
+            public_key_short = coordinator.data["public_key"][:10]
+            device_name = f"MeshCore {raw_device_name} ({public_key_short})"
+        
         # Set device info
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, coordinator.config_entry.entry_id)},
-            name=f"MeshCore {raw_device_name}",
-            manufacturer="MeshCore",
+            name=device_name,
+            manufacturer=coordinator.data.get("manufacturer_name", "MeshCore") if coordinator.data else "MeshCore",
             model="Mesh Radio",
-            sw_version=coordinator.data.get("version", "Unknown") if coordinator.data else "Unknown",
+            sw_version=coordinator.data.get("firmware_version", coordinator.data.get("version", "Unknown")) if coordinator.data else "Unknown",
+            hw_version=coordinator.data.get("firmware_build_date", "Unknown") if coordinator.data else "Unknown",
         )
 
     @property
@@ -700,14 +707,22 @@ class MeshCoreRepeaterSensor(CoordinatorEntity, SensorEntity):
         device_info = {
             "identifiers": {(DOMAIN, self.device_id)},
             "name": device_name,
-            "manufacturer": "MeshCore",
+            "manufacturer": repeater_stats.get("manufacturer_name", "MeshCore") if repeater_stats else "MeshCore",
             "model": "Mesh Repeater",
             "via_device": (DOMAIN, coordinator.config_entry.entry_id),  # Link to the main device
         }
         
-        # Add version if available
-        if repeater_stats and "version" in repeater_stats:
-            device_info["sw_version"] = repeater_stats["version"]
+        # Add version information if available
+        if repeater_stats:
+            # Prefer firmware_version if available, fall back to version
+            if "firmware_version" in repeater_stats:
+                device_info["sw_version"] = repeater_stats["firmware_version"]
+            elif "version" in repeater_stats:
+                device_info["sw_version"] = repeater_stats["version"]
+                
+            # Add build date as hardware version if available
+            if "firmware_build_date" in repeater_stats:
+                device_info["hw_version"] = repeater_stats["firmware_build_date"]
             
         self._attr_device_info = DeviceInfo(**device_info)
     

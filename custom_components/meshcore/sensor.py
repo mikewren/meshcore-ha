@@ -687,14 +687,29 @@ class MeshCoreRepeaterSensor(CoordinatorEntity, SensorEntity):
             description.key
         )
         
+        # Get repeater stats if available
+        repeater_stats = coordinator.data.get("repeater_stats", {}).get(repeater_name, {})
+        
+        # Default device name, include public key if available
+        device_name = f"MeshCore Repeater: {repeater_name}"
+        if repeater_stats and "public_key" in repeater_stats:
+            public_key_short = repeater_stats.get("public_key_short", repeater_stats["public_key"][:10])
+            device_name = f"MeshCore Repeater: {repeater_name} ({public_key_short})"
+        
         # Set device info to create a separate device for this repeater
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, self.device_id)},
-            name=f"MeshCore Repeater: {repeater_name}",
-            manufacturer="MeshCore",
-            model="Mesh Repeater",
-            via_device=(DOMAIN, coordinator.config_entry.entry_id),  # Link to the main device
-        )
+        device_info = {
+            "identifiers": {(DOMAIN, self.device_id)},
+            "name": device_name,
+            "manufacturer": "MeshCore",
+            "model": "Mesh Repeater",
+            "via_device": (DOMAIN, coordinator.config_entry.entry_id),  # Link to the main device
+        }
+        
+        # Add version if available
+        if repeater_stats and "version" in repeater_stats:
+            device_info["sw_version"] = repeater_stats["version"]
+            
+        self._attr_device_info = DeviceInfo(**device_info)
     
     @property
     def native_value(self) -> Any:

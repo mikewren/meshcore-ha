@@ -495,6 +495,68 @@ class MeshCoreAPI:
                 _LOGGER.error(f"Error getting repeater stats: {ex}")
                 _LOGGER.exception("Detailed exception for stats")
                 return {}
+                
+    async def get_repeater_version(self, repeater_name: str) -> Optional[str]:
+        """Get version information from a repeater using the 'ver' command."""
+        if not self._connected or not self._mesh_core:
+            _LOGGER.error("Not connected to MeshCore device")
+            return None
+            
+        async with self._device_lock:
+            try:
+                # Find the repeater in contacts
+                repeater_found = False
+                repeater_key = None
+                
+                # First ensure we have contacts
+                if not self._cached_contacts:
+                    # Get contacts if we don't have them cached
+                    _LOGGER.info(f"No cached contacts, fetching contacts before getting version for {repeater_name}")
+                    self._cached_contacts = await self.get_contacts()
+                
+                # Look for the repeater by name
+                for name, contact in self._cached_contacts.items():
+                    if name == repeater_name:
+                        repeater_found = True
+                        # IMPORTANT: Use the full public key as in the CLI code
+                        repeater_key = bytes.fromhex(contact["public_key"])
+                        _LOGGER.info(f"Found repeater {repeater_name} with key: {repeater_key.hex()} for version info")
+                        break
+                
+                if not repeater_found or not repeater_key:
+                    _LOGGER.error(f"Repeater {repeater_name} not found in contacts for version check")
+                    return None
+                
+                # Send 'ver' command
+                _LOGGER.info(f"Sending 'ver' command to repeater {repeater_name}")
+                # Using send_cmd equivalent to "cmd RepeaterName ver" in mccli.py
+                cmd_result = await self._mesh_core.send_cmd(repeater_key[:6], "ver")
+                _LOGGER.info(f"Ver command result: {cmd_result}")
+                
+                # Wait for message response (with a reasonable timeout)
+                _LOGGER.info(f"Waiting for version message from repeater {repeater_name}")
+                wait_result = await self._mesh_core.wait_msg(timeout=5)
+                
+                if wait_result:
+                    # Get the message
+                    message = await self._mesh_core.get_msg()
+                    
+                    # Check if it's a valid version message
+                    if message and isinstance(message, dict) and "text" in message:
+                        version_text = message.get("text", "")
+                        _LOGGER.info(f"Received version from repeater {repeater_name}: {version_text}")
+                        return version_text
+                    else:
+                        _LOGGER.warning(f"Received non-version message from repeater {repeater_name}: {message}")
+                        return None
+                else:
+                    _LOGGER.warning(f"No version message received from repeater {repeater_name} - timeout waiting for response")
+                    return None
+                    
+            except Exception as ex:
+                _LOGGER.error(f"Error getting repeater version: {ex}")
+                _LOGGER.exception("Detailed exception for version check")
+                return None
     
     async def send_message(self, node_name: str, message: str) -> bool:
         """Send message to a specific node by name."""

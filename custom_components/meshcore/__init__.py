@@ -243,6 +243,12 @@ class MeshCoreDataUpdateCoordinator(DataUpdateCoordinator):
         # Create a dictionary to store all repeater stats (including cached ones)
         all_repeater_stats = {}
         
+        # Initialize repeater versions if needed
+        if not hasattr(self, "_repeater_versions"):
+            self._repeater_versions = {}
+            # Also initialize version check timestamps
+            self._last_version_checks = {}
+            
         # Start with any existing stats we have
         if hasattr(self, "_repeater_stats") and self._repeater_stats:
             all_repeater_stats.update(self._repeater_stats)
@@ -297,6 +303,30 @@ class MeshCoreDataUpdateCoordinator(DataUpdateCoordinator):
                 if login_success:
                     self._repeater_login_times[repeater_name] = current_time
                     self.logger.info(f"Successfully logged in to repeater: {repeater_name}")
+                    
+                    # Only check version if a password was provided (admin permissions)
+                    if password:
+                        # Check if we need to fetch repeater version (on first login or daily)
+                        # Daily version check (86400 seconds = 24 hours)
+                        version_check_interval = 86400
+                        last_version_check = self._last_version_checks.get(repeater_name, 0)
+                        time_since_version_check = current_time - last_version_check
+                        
+                        # Get version on first login or if it's been more than a day
+                        if repeater_name not in self._repeater_versions or time_since_version_check >= version_check_interval:
+                            self.logger.info(f"Fetching version for repeater {repeater_name} (admin login)")
+                            version = await self.api.get_repeater_version(repeater_name)
+                            
+                            if version:
+                                self._repeater_versions[repeater_name] = version
+                                self.logger.info(f"Updated version for repeater {repeater_name}: {version}")
+                            else:
+                                self.logger.warning(f"Could not get version for repeater {repeater_name}")
+                                
+                            # Update timestamp even on failure to avoid constant retries
+                            self._last_version_checks[repeater_name] = current_time
+                    else:
+                        self.logger.debug(f"Skipping version check for repeater {repeater_name} (no admin password provided)")
                 else:
                     self.logger.error(f"Failed to login to repeater: {repeater_name} - using password: {'yes' if password else 'no (guest)'}")
                     # Update timestamp even on failure to avoid hammering with login attempts
@@ -311,6 +341,22 @@ class MeshCoreDataUpdateCoordinator(DataUpdateCoordinator):
                 stats = await self.api.get_repeater_stats(repeater_name)
                 
                 if stats:
+                    # Always add repeater_name and public_key to stats
+                    stats["repeater_name"] = repeater_name
+                    
+                    # Find and add public key
+                    for contact_name, contact in self.api._cached_contacts.items():
+                        if contact_name == repeater_name:
+                            public_key = contact.get("public_key", "")
+                            stats["public_key"] = public_key
+                            # Also add a shortened version for display
+                            stats["public_key_short"] = public_key[:10] if public_key else ""
+                            break
+                    
+                    # Add version info if available
+                    if repeater_name in self._repeater_versions:
+                        stats["version"] = self._repeater_versions[repeater_name]
+                    
                     # Add the stats to our results
                     self._repeater_stats[repeater_name] = stats
                     all_repeater_stats[repeater_name] = stats

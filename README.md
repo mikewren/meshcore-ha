@@ -4,7 +4,7 @@
 
 This is a custom Home Assistant integration for MeshCore mesh radio nodes. It allows you to monitor and control MeshCore nodes via USB, BLE, or TCP connections.
 
-> :warning: **Work in Progress**: This integration is under active development. BLE and TCP connection methods haven't been thoroughly tested yet.
+> :warning: **Work in Progress**: This integration is under active development. BLE connection method hasn't been thoroughly tested yet.
 
 Core integration is powered by [mccli.py](https://github.com/fdlamotte/mccli/blob/main/mccli.py) from fdlamotte.
 
@@ -54,27 +54,36 @@ Core integration is powered by [mccli.py](https://github.com/fdlamotte/mccli/blo
 
 For the local node:
 - **Node Status**: Shows if the node is online or offline
+- **Battery Voltage**: Battery voltage in volts
+- **Battery Percentage**: Battery level (percentage)
 - **Node Count**: Number of nodes in the mesh network (including the local node)
-- **Signal Strength**: RSSI of the last received packet (in dBm)
-- **Signal-to-Noise Ratio**: SNR of the last received packet
-- **Battery**: Battery level (percentage)
-- **Last Message**: The most recent message received
-- **Uptime**: How long the node has been running
-- **Airtime**: Total radio airtime used
-- **Messages Sent**: Total number of messages sent
-- **Messages Received**: Total number of messages received
+- **TX Power**: Transmission power in dBm
+- **Latitude/Longitude**: Node location (if available)
+- **Frequency**: Radio frequency in MHz
+- **Bandwidth**: Radio bandwidth in kHz
+- **Spreading Factor**: Radio spreading factor
 
 For remote nodes (automatically created for each node in the network):
-- **Signal Strength**: RSSI of the last received packet from that node
-- **Battery**: Battery level of the remote node (if available)
-- **Last Message**: Most recent message received from that node
+- **MeshCore Contacts**: Diagnostic sensor showing all contacts with their details
+- **Contact Status**: Status sensor for each contact ("fresh" or "stale" based on last seen time)
+- Contact details are included as attributes (name, type, public key, last seen, etc.)
+
+For message tracking:
+- **Channel Messages**: Binary sensors for tracking messages on channels 0-3
+- **Contact Messages**: Binary sensors for tracking messages from specific contacts
 
 For repeater nodes:
 - **Battery Voltage**: Battery voltage in volts
 - **Battery Percentage**: Estimated battery level percentage
 - **Uptime**: How long the repeater has been running (in minutes)
 - **Airtime**: Total radio airtime used by the repeater (in minutes)
-- **Temperature**: Internal temperature of the repeater (if available)
+- **Messages Sent/Received**: Count of messages handled by the repeater
+- **TX Queue Length**: Number of messages in transmission queue
+- **Free Queue Length**: Number of free slots in queue
+- **Sent/Received Flood Messages**: Count of broadcast messages
+- **Sent/Received Direct Messages**: Count of direct messages
+- **Full Events**: Count of queue full events
+- **Direct/Flood Duplicates**: Count of duplicate messages
 
 ## Services
 

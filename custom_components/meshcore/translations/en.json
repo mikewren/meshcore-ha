@@ -1,0 +1,100 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "Device is already configured"
+    },
+    "error": {
+      "cannot_connect": "Failed to connect",
+      "unknown": "Unexpected error"
+    },
+    "step": {
+      "user": {
+        "data": {
+          "connection_type": "Connection Type"
+        },
+        "description": "Select how to connect to your MeshCore node",
+        "title": "MeshCore Setup"
+      },
+      "usb": {
+        "data": {
+          "usb_path": "USB Device Path",
+          "baudrate": "Baud Rate",
+          "scan_interval": "Status Update Interval (seconds)"
+        },
+        "description": "Select the USB port where your MeshCore device is connected",
+        "title": "MeshCore USB Setup"
+      },
+      "ble": {
+        "data": {
+          "ble_address": "BLE Device Address",
+          "scan_interval": "Status Update Interval (seconds)"
+        },
+        "description": "Select your MeshCore BLE device",
+        "title": "MeshCore BLE Setup"
+      },
+      "tcp": {
+        "data": {
+          "tcp_host": "TCP Hostname or IP Address",
+          "tcp_port": "TCP Port",
+          "scan_interval": "Status Update Interval (seconds)"
+        },
+        "description": "Enter the network details for your MeshCore TCP server",
+        "title": "MeshCore TCP Setup"
+      }
+    }
+  },
+  "services": {
+    "send_message": {
+      "name": "Send Message",
+      "description": "Send a message to a MeshCore node",
+      "fields": {
+        "node_id": {
+          "name": "Node ID",
+          "description": "The ID of the node to send the message to"
+        },
+        "message": {
+          "name": "Message",
+          "description": "The message text to send"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "node_status": {
+        "name": "Node Status",
+        "state": {
+          "online": "Online",
+          "offline": "Offline"
+        }
+      },
+      "node_count": {
+        "name": "Node Count"
+      },
+      "last_rssi": {
+        "name": "Signal Strength"
+      },
+      "last_snr": {
+        "name": "Signal-to-Noise Ratio"
+      },
+      "battery": {
+        "name": "Battery"
+      },
+      "last_message": {
+        "name": "Last Message"
+      },
+      "uptime": {
+        "name": "Uptime"
+      },
+      "airtime": {
+        "name": "Airtime"
+      },
+      "messages_sent": {
+        "name": "Messages Sent"
+      },
+      "messages_received": {
+        "name": "Messages Received"
+      }
+    }
+  }
+}

@@ -113,11 +113,27 @@ async def validate_usb_input(hass: HomeAssistant, data: Dict[str, Any]) -> Dict[
             usb_path=data[CONF_USB_PATH],
             baudrate=data[CONF_BAUDRATE],
         )
-        await asyncio.wait_for(api.connect(), timeout=CONNECTION_TIMEOUT)
+        
+        # Try to connect with timeout
+        connect_success = await asyncio.wait_for(api.connect(), timeout=CONNECTION_TIMEOUT)
+        
+        # Check if connection was successful
+        if not connect_success:
+            _LOGGER.error("Failed to connect to USB device - connect() returned False")
+            raise CannotConnect("Device connection failed")
+            
+        # Get node info to verify communication
         node_info = await api.get_node_info()
+        
+        # Validate we got meaningful info back
+        if not node_info or not isinstance(node_info, dict) or not node_info.get('name'):
+            _LOGGER.error("Connected to device but couldn't get node info")
+            raise CannotConnect("Device connected but no response to info request")
+            
+        # Disconnect when done
         await api.disconnect()
         
-        # If we get here, the connection was successful
+        # If we get here, the connection was successful and we got valid info
         return {"title": f"MeshCore Node {node_info.get('name', 'Unknown')}"}
     except asyncio.TimeoutError:
         raise CannotConnect("Connection timed out")
@@ -133,11 +149,27 @@ async def validate_ble_input(hass: HomeAssistant, data: Dict[str, Any]) -> Dict[
             connection_type=CONNECTION_TYPE_BLE,
             ble_address=data[CONF_BLE_ADDRESS],
         )
-        await asyncio.wait_for(api.connect(), timeout=CONNECTION_TIMEOUT)
+        
+        # Try to connect with timeout
+        connect_success = await asyncio.wait_for(api.connect(), timeout=CONNECTION_TIMEOUT)
+        
+        # Check if connection was successful
+        if not connect_success:
+            _LOGGER.error("Failed to connect to BLE device - connect() returned False")
+            raise CannotConnect("Device connection failed")
+            
+        # Get node info to verify communication
         node_info = await api.get_node_info()
+        
+        # Validate we got meaningful info back
+        if not node_info or not isinstance(node_info, dict) or not node_info.get('name'):
+            _LOGGER.error("Connected to device but couldn't get node info")
+            raise CannotConnect("Device connected but no response to info request")
+            
+        # Disconnect when done
         await api.disconnect()
         
-        # If we get here, the connection was successful
+        # If we get here, the connection was successful and we got valid info
         return {"title": f"MeshCore Node {node_info.get('name', 'Unknown')}"}
     except asyncio.TimeoutError:
         raise CannotConnect("Connection timed out")
@@ -154,11 +186,27 @@ async def validate_tcp_input(hass: HomeAssistant, data: Dict[str, Any]) -> Dict[
             tcp_host=data[CONF_TCP_HOST],
             tcp_port=data[CONF_TCP_PORT],
         )
-        await asyncio.wait_for(api.connect(), timeout=CONNECTION_TIMEOUT)
+        
+        # Try to connect with timeout
+        connect_success = await asyncio.wait_for(api.connect(), timeout=CONNECTION_TIMEOUT)
+        
+        # Check if connection was successful
+        if not connect_success:
+            _LOGGER.error("Failed to connect to TCP device - connect() returned False")
+            raise CannotConnect("Device connection failed")
+            
+        # Get node info to verify communication
         node_info = await api.get_node_info()
+        
+        # Validate we got meaningful info back
+        if not node_info or not isinstance(node_info, dict) or not node_info.get('name'):
+            _LOGGER.error("Connected to device but couldn't get node info")
+            raise CannotConnect("Device connected but no response to info request")
+            
+        # Disconnect when done
         await api.disconnect()
         
-        # If we get here, the connection was successful
+        # If we get here, the connection was successful and we got valid info
         return {"title": f"MeshCore Node {node_info.get('name', 'Unknown')}"}
     except asyncio.TimeoutError:
         raise CannotConnect("Connection timed out")

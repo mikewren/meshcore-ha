@@ -111,7 +111,7 @@ data:
 ### Connection Issues
 
 - **USB Connection**: Make sure the device is properly connected and the correct port is selected. Try a different baud rate if the default doesn't work.
-- **BLE Connection**: Ensure Bluetooth is enabled on your Home Assistant host. Try moving closer to the device if signal strength is low.
+- **BLE Connection**: Ensure Bluetooth is enabled on your Home Assistant host. Try moving closer to the device if signal strength is low. **Note: BLE pairing over Home Assistant Bluetooth proxy is not currently working until MeshCore supports disabling the PIN requirement.**
 - **TCP Connection**: Verify the hostname/IP and port are correct and that there are no firewalls blocking the connection.
 
 ### Repeater Issues
@@ -137,7 +137,7 @@ data:
 
 - Home Assistant (version 2023.8.0 or newer)
 - MeshCore node with firmware that supports API commands
-- For BLE: Bluetooth adapter on the Home Assistant host
+- For BLE: Bluetooth adapter on the Home Assistant host (direct connection only; proxy connections don't work with PIN pairing)
 - For USB: USB port on the Home Assistant host
 
 ## License

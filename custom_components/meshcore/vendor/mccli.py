@@ -435,7 +435,15 @@ class MeshCore:
             case 11: # contact
                 self.result.set_result("meshcore://" + data[1:].hex())
             case 12: # battery voltage
-                self.result.set_result(int.from_bytes(data[1:2], byteorder='little'))
+                # Read full 16-bit battery voltage in millivolts
+                if len(data) >= 3:  # Make sure we have at least 2 bytes of battery data
+                    battery_mv = int.from_bytes(data[1:3], byteorder='little')
+                    self.log_debug(f"Battery voltage: {battery_mv} mV")
+                    # Return the raw millivolts value
+                    self.result.set_result(battery_mv)
+                else:
+                    self.log_debug(f"Incomplete battery voltage data, expected 2 bytes, got {len(data)-1}")
+                    self.result.set_result(0)
             case 13: # device info response
                 self.log_debug("Received device info response")
                 res = {}

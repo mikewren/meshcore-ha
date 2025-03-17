@@ -420,13 +420,13 @@ class MeshCoreSensor(CoordinatorEntity, SensorEntity):
         elif key == "battery_voltage":
             bat_value = self.coordinator.data.get("bat", 0)
             if isinstance(bat_value, (int, float)) and bat_value > 0:
-                return bat_value / 10  # Convert to voltage
+                return bat_value / 1000.0  # Convert millivolts to volts
             return None
             
         elif key == "battery_percentage":
             bat_value = self.coordinator.data.get("bat", 0)
             if isinstance(bat_value, (int, float)) and bat_value > 0:
-                voltage = bat_value / 10  # Convert to voltage
+                voltage = bat_value / 1000.0  # Convert millivolts to volts
                 # Calculate percentage based on min/max voltage range
                 percentage = ((voltage - MIN_BATTERY_VOLTAGE) / 
                              (MAX_BATTERY_VOLTAGE - MIN_BATTERY_VOLTAGE)) * 100

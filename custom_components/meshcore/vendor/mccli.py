@@ -167,25 +167,60 @@ class TCPConnection:
             self.mc.log_debug(f"TCP RX raw: {data.hex()}")
             
         cur_data = data
-        while (len(cur_data) > 0) :
-            if cur_data[0] != 0x3E :
+        while (len(cur_data) > 0):
+            # Check if we have enough data for a valid frame (at least 3 bytes for header)
+            if len(cur_data) < 3:
+                if self.mc and hasattr(self.mc, 'log_debug'):
+                    self.mc.log_debug(f"Incomplete frame data, need at least 3 bytes, got {len(cur_data)}")
+                break
+            
+            # Check for valid frame header
+            if cur_data[0] != 0x3E:
                 if self.mc and hasattr(self.mc, 'log_debug'):
                     self.mc.log_debug(f"Error with received frame, invalid first byte: 0x{cur_data[0]:02x}")
-                printerr(f"Error with received frame trying anyway ... first byte is {cur_data[0]}")
-        
-            frame_size = int.from_bytes(cur_data[1:2], byteorder='little')
-            frame = cur_data[3:3+frame_size]
+                printerr(f"Error with received frame, discarding invalid byte and continuing")
+                
+                # Discard the invalid byte and continue with the rest of the data
+                cur_data = cur_data[1:]
+                continue
             
-            if self.mc and hasattr(self.mc, 'log_debug'):
-                self.mc.log_debug(f"TCP frame complete: {frame_size} bytes, data={frame.hex()}")
-
-            if not self.mc is None:
-                try:
-                    self.mc.handle_rx(frame)
-                except Exception as ex:
-                    printerr(f"Error handling TCP data: {ex}")
-        
-            cur_data = cur_data[3+frame_size:]
+            # Parse frame size
+            try:
+                frame_size = int.from_bytes(cur_data[1:2], byteorder='little')
+                
+                # Sanity check on frame size
+                if frame_size < 0 or frame_size > 1024:  # Maximum reasonable frame size
+                    if self.mc and hasattr(self.mc, 'log_debug'):
+                        self.mc.log_debug(f"Invalid frame size: {frame_size}, skipping")
+                    cur_data = cur_data[1:]  # Skip the frame header byte and try again
+                    continue
+                
+                # Check if we have the full frame
+                if len(cur_data) < 3 + frame_size:
+                    if self.mc and hasattr(self.mc, 'log_debug'):
+                        self.mc.log_debug(f"Incomplete frame: have {len(cur_data)} bytes, need {3 + frame_size}")
+                    break  # Wait for more data
+                
+                # Extract the frame
+                frame = cur_data[3:3+frame_size]
+                
+                if self.mc and hasattr(self.mc, 'log_debug'):
+                    self.mc.log_debug(f"TCP frame complete: {frame_size} bytes, data={frame.hex()}")
+                
+                # Process the frame
+                if not self.mc is None:
+                    try:
+                        self.mc.handle_rx(frame)
+                    except Exception as ex:
+                        printerr(f"Error handling TCP data: {ex}")
+                
+                # Move to the next frame
+                cur_data = cur_data[3+frame_size:]
+                
+            except Exception as ex:
+                if self.mc and hasattr(self.mc, 'log_debug'):
+                    self.mc.log_debug(f"Error parsing TCP frame: {ex}")
+                cur_data = cur_data[1:]  # Skip one byte and try again
 
     async def send(self, data):
         size = len(data)

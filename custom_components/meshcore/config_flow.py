@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.components import usb
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
@@ -29,6 +29,15 @@ from .const import (
     DEFAULT_TCP_PORT,
     DEFAULT_SCAN_INTERVAL,
     CONNECTION_TIMEOUT,
+    CONF_REPEATER_SUBSCRIPTIONS,
+    CONF_REPEATER_NAME,
+    CONF_REPEATER_PASSWORD,
+    CONF_REPEATER_UPDATE_INTERVAL,
+    DEFAULT_REPEATER_UPDATE_INTERVAL,
+    CONF_INFO_INTERVAL,
+    CONF_MESSAGES_INTERVAL,
+    DEFAULT_INFO_INTERVAL,
+    DEFAULT_MESSAGES_INTERVAL,
 )
 from .meshcore_api import MeshCoreAPI
 
@@ -49,14 +58,32 @@ USB_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_USB_PATH): str,
         vol.Optional(CONF_BAUDRATE, default=DEFAULT_BAUDRATE): cv.positive_int,
-        vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): cv.positive_int,
+        vol.Optional(
+            CONF_MESSAGES_INTERVAL, 
+            default=DEFAULT_MESSAGES_INTERVAL,
+            description="How often to check for new messages (seconds)"
+        ): vol.All(cv.positive_int, vol.Range(min=5, max=60)),
+        vol.Optional(
+            CONF_INFO_INTERVAL, 
+            default=DEFAULT_INFO_INTERVAL,
+            description="How often to update device info and contacts (seconds)"
+        ): vol.All(cv.positive_int, vol.Range(min=30, max=300)),
     }
 )
 
 BLE_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_BLE_ADDRESS): str,
-        vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): cv.positive_int,
+        vol.Optional(
+            CONF_MESSAGES_INTERVAL, 
+            default=DEFAULT_MESSAGES_INTERVAL,
+            description="How often to check for new messages (seconds)"
+        ): vol.All(cv.positive_int, vol.Range(min=5, max=60)),
+        vol.Optional(
+            CONF_INFO_INTERVAL, 
+            default=DEFAULT_INFO_INTERVAL,
+            description="How often to update device info and contacts (seconds)"
+        ): vol.All(cv.positive_int, vol.Range(min=30, max=300)),
     }
 )
 
@@ -64,7 +91,16 @@ TCP_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_TCP_HOST): str,
         vol.Optional(CONF_TCP_PORT, default=DEFAULT_TCP_PORT): cv.port,
-        vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): cv.positive_int,
+        vol.Optional(
+            CONF_MESSAGES_INTERVAL, 
+            default=DEFAULT_MESSAGES_INTERVAL,
+            description="How often to check for new messages (seconds)"
+        ): vol.All(cv.positive_int, vol.Range(min=5, max=60)),
+        vol.Optional(
+            CONF_INFO_INTERVAL, 
+            default=DEFAULT_INFO_INTERVAL,
+            description="How often to update device info and contacts (seconds)"
+        ): vol.All(cv.positive_int, vol.Range(min=30, max=300)),
     }
 )
 
@@ -140,6 +176,12 @@ class MeshCoreConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Initialize flow."""
         self.connection_type: Optional[str] = None
         self.discovery_info: Optional[Dict[str, Any]] = None
+        
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry):
+        """Get the options flow for this handler."""
+        return OptionsFlowHandler(config_entry)
 
     async def async_step_user(self, user_input: Optional[Dict[str, Any]] = None) -> FlowResult:
         """Handle the initial step."""
@@ -170,7 +212,9 @@ class MeshCoreConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_CONNECTION_TYPE: CONNECTION_TYPE_USB,
                     CONF_USB_PATH: user_input[CONF_USB_PATH],
                     CONF_BAUDRATE: user_input[CONF_BAUDRATE],
-                    CONF_SCAN_INTERVAL: user_input[CONF_SCAN_INTERVAL],
+                    CONF_MESSAGES_INTERVAL: user_input.get(CONF_MESSAGES_INTERVAL, DEFAULT_MESSAGES_INTERVAL),
+                    CONF_INFO_INTERVAL: user_input.get(CONF_INFO_INTERVAL, DEFAULT_INFO_INTERVAL),
+                    CONF_REPEATER_SUBSCRIPTIONS: [],  # Initialize with empty repeater subscriptions
                 })
             except CannotConnect:
                 errors["base"] = "cannot_connect"
@@ -185,7 +229,14 @@ class MeshCoreConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema({
                 vol.Required(CONF_USB_PATH): str,
                 vol.Optional(CONF_BAUDRATE, default=DEFAULT_BAUDRATE): cv.positive_int,
-                vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): cv.positive_int,
+                vol.Optional(
+                    CONF_MESSAGES_INTERVAL,
+                    default=DEFAULT_MESSAGES_INTERVAL
+                ): int,
+                vol.Optional(
+                    CONF_INFO_INTERVAL,
+                    default=DEFAULT_INFO_INTERVAL
+                ): int,
             }),
             errors=errors
         )
@@ -200,7 +251,9 @@ class MeshCoreConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return self.async_create_entry(title=info["title"], data={
                     CONF_CONNECTION_TYPE: CONNECTION_TYPE_BLE,
                     CONF_BLE_ADDRESS: user_input[CONF_BLE_ADDRESS],
-                    CONF_SCAN_INTERVAL: user_input[CONF_SCAN_INTERVAL],
+                    CONF_MESSAGES_INTERVAL: user_input.get(CONF_MESSAGES_INTERVAL, DEFAULT_MESSAGES_INTERVAL),
+                    CONF_INFO_INTERVAL: user_input.get(CONF_INFO_INTERVAL, DEFAULT_INFO_INTERVAL),
+                    CONF_REPEATER_SUBSCRIPTIONS: [],  # Initialize with empty repeater subscriptions
                 })
             except CannotConnect:
                 errors["base"] = "cannot_connect"
@@ -224,12 +277,29 @@ class MeshCoreConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             schema = vol.Schema(
                 {
                     vol.Required(CONF_BLE_ADDRESS): vol.In(devices),
-                    vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): cv.positive_int,
+                    vol.Optional(
+                        CONF_MESSAGES_INTERVAL,
+                        default=DEFAULT_MESSAGES_INTERVAL
+                    ): int,
+                    vol.Optional(
+                        CONF_INFO_INTERVAL,
+                        default=DEFAULT_INFO_INTERVAL
+                    ): int,
                 }
             )
         else:
-            # Otherwise, allow manual entry
-            schema = BLE_SCHEMA
+            # Otherwise, allow manual entry, but with simplified schema
+            schema = vol.Schema({
+                vol.Required(CONF_BLE_ADDRESS): str,
+                vol.Optional(
+                    CONF_MESSAGES_INTERVAL,
+                    default=DEFAULT_MESSAGES_INTERVAL
+                ): int,
+                vol.Optional(
+                    CONF_INFO_INTERVAL,
+                    default=DEFAULT_INFO_INTERVAL
+                ): int,
+            })
 
         return self.async_show_form(
             step_id="ble", data_schema=schema, errors=errors
@@ -246,7 +316,9 @@ class MeshCoreConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_CONNECTION_TYPE: CONNECTION_TYPE_TCP,
                     CONF_TCP_HOST: user_input[CONF_TCP_HOST],
                     CONF_TCP_PORT: user_input[CONF_TCP_PORT],
-                    CONF_SCAN_INTERVAL: user_input[CONF_SCAN_INTERVAL],
+                    CONF_MESSAGES_INTERVAL: user_input.get(CONF_MESSAGES_INTERVAL, DEFAULT_MESSAGES_INTERVAL),
+                    CONF_INFO_INTERVAL: user_input.get(CONF_INFO_INTERVAL, DEFAULT_INFO_INTERVAL),
+                    CONF_REPEATER_SUBSCRIPTIONS: [],  # Initialize with empty repeater subscriptions
                 })
             except CannotConnect:
                 errors["base"] = "cannot_connect"
@@ -255,5 +327,185 @@ class MeshCoreConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "unknown"
 
         return self.async_show_form(
-            step_id="tcp", data_schema=TCP_SCHEMA, errors=errors
+            step_id="tcp", 
+            data_schema=vol.Schema({
+                vol.Required(CONF_TCP_HOST): str,
+                vol.Optional(CONF_TCP_PORT, default=DEFAULT_TCP_PORT): cv.port,
+                vol.Optional(
+                    CONF_MESSAGES_INTERVAL,
+                    default=DEFAULT_MESSAGES_INTERVAL
+                ): int,
+                vol.Optional(
+                    CONF_INFO_INTERVAL,
+                    default=DEFAULT_INFO_INTERVAL
+                ): int,
+            }),
+            errors=errors
         )
+
+
+class OptionsFlowHandler(config_entries.OptionsFlow):
+    """Handle options for MeshCore."""
+
+    def __init__(self, config_entry):
+        """Initialize options flow."""
+        self.config_entry = config_entry
+        self.repeater_subscriptions = list(config_entry.data.get(CONF_REPEATER_SUBSCRIPTIONS, []))
+        self.hass = None
+
+    async def async_step_init(self, user_input=None):
+        """Handle options flow."""
+        if user_input is not None:
+            # Get the action from the input
+            action = user_input.get("action")
+            
+            if action == "add_repeater":
+                # Go to add repeater screen
+                return await self.async_step_add_repeater()
+                
+            elif action == "remove_repeater" and user_input.get("repeater_to_remove"):
+                # Remove the selected repeater
+                repeater_to_remove = user_input.get("repeater_to_remove")
+                
+                # Get current repeater list
+                current_repeaters = self.repeater_subscriptions.copy()
+                
+                # Update the list without the removed repeater
+                self.repeater_subscriptions = [
+                    r for r in self.repeater_subscriptions 
+                    if r.get("name") != repeater_to_remove
+                ]
+                
+                # Update the config entry data
+                new_data = dict(self.config_entry.data)
+                new_data[CONF_REPEATER_SUBSCRIPTIONS] = self.repeater_subscriptions
+                self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
+                
+                # Return to the init step to show updated list
+                return await self.async_step_init()
+                
+            else:
+                # Save options
+                new_options = {
+                    CONF_INFO_INTERVAL: user_input.get(CONF_INFO_INTERVAL, DEFAULT_INFO_INTERVAL),
+                    CONF_MESSAGES_INTERVAL: user_input.get(CONF_MESSAGES_INTERVAL, DEFAULT_MESSAGES_INTERVAL),
+                }
+                return self.async_create_entry(title="", data=new_options)
+
+        # Show the form with action options and repeater list
+        options = self.config_entry.options
+        
+        # Build the schema with a list of options
+        schema = {
+            vol.Optional(
+                CONF_MESSAGES_INTERVAL,
+                default=options.get(CONF_MESSAGES_INTERVAL, DEFAULT_MESSAGES_INTERVAL)
+            ): int,
+            
+            vol.Optional(
+                CONF_INFO_INTERVAL,
+                default=options.get(CONF_INFO_INTERVAL, DEFAULT_INFO_INTERVAL)
+            ): int,
+            
+            vol.Optional(
+                "action"
+            ): vol.In({
+                "add_repeater": "Add Repeater",
+                "remove_repeater": "Remove Repeater",
+            }),
+        }
+        
+        # If there are repeaters and the action is remove, add a selection dropdown
+        if self.repeater_subscriptions and "action" in schema:
+            repeater_names = {r.get("name"): r.get("name") for r in self.repeater_subscriptions}
+            if repeater_names:
+                schema["repeater_to_remove"] = vol.In(repeater_names)
+        
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(schema),
+            description_placeholders={
+                "repeaters": ", ".join([r.get("name", "Unknown") for r in self.repeater_subscriptions]) or "None configured"
+            },
+        )
+        
+        
+    def _get_repeater_contacts(self):
+        """Get repeater contacts from coordinator's cached data."""
+        # Get the coordinator
+        coordinator = self.hass.data[DOMAIN].get(self.config_entry.entry_id)
+        if not coordinator or not coordinator.data:
+            return []
+            
+        # Extract repeater contacts from cached data
+        contacts = coordinator.data.get("contacts", [])
+        repeater_contacts = []
+        
+        for contact in contacts:
+            if not isinstance(contact, dict):
+                continue
+                
+            contact_name = contact.get("adv_name", "")
+            contact_type = contact.get("type", 0)
+            
+            # Type 2 indicates a repeater
+            if contact_name and contact_type == 2:
+                repeater_contacts.append(contact_name)
+                
+        return repeater_contacts
+        
+    async def async_step_add_repeater(self, user_input=None):
+        """Handle adding a new repeater subscription."""
+        errors = {}
+        
+        if user_input is not None:
+            repeater_name = user_input.get(CONF_REPEATER_NAME)
+            password = user_input.get(CONF_REPEATER_PASSWORD)
+            update_interval = user_input.get(CONF_REPEATER_UPDATE_INTERVAL, DEFAULT_REPEATER_UPDATE_INTERVAL)
+            
+            # Check if this repeater is already in the subscriptions
+            existing_names = [r.get("name") for r in self.repeater_subscriptions]
+            if repeater_name in existing_names:
+                errors["repeater_name"] = "already_configured"
+            else:
+                # Add the new repeater subscription
+                self.repeater_subscriptions.append({
+                    "name": repeater_name,
+                    "password": password,
+                    "update_interval": update_interval,
+                    "enabled": True,
+                })
+                
+                # Update the config entry data
+                new_data = dict(self.config_entry.data)
+                new_data[CONF_REPEATER_SUBSCRIPTIONS] = self.repeater_subscriptions
+                self.hass.config_entries.async_update_entry(self.config_entry, data=new_data)
+                
+                # Return to the init step
+                return await self.async_step_init()
+        
+        # Get repeater contacts
+        repeater_contacts = self._get_repeater_contacts()
+        
+        # Show the form with repeater selection
+        if not repeater_contacts:
+            # No repeaters found
+            return self.async_show_form(
+                step_id="add_repeater",
+                data_schema=vol.Schema({
+                    vol.Required("no_repeaters", default="No repeaters found in contacts. Please ensure your device has repeaters in its contacts list."): str,
+                }),
+                errors=errors,
+            )
+        
+        # Contacts found, show selection form
+        return self.async_show_form(
+            step_id="add_repeater",
+            data_schema=vol.Schema({
+                vol.Required(CONF_REPEATER_NAME): vol.In({name: name for name in repeater_contacts}),
+                vol.Optional(CONF_REPEATER_PASSWORD, default=""): str,
+                vol.Optional(CONF_REPEATER_UPDATE_INTERVAL, default=DEFAULT_REPEATER_UPDATE_INTERVAL): int,
+            }),
+            errors=errors,
+        )
+        

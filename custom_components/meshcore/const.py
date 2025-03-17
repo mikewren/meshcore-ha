@@ -31,5 +31,31 @@ ATTR_MESSAGE: Final = "message"
 NODE_TYPE_CLIENT: Final = 1
 NODE_TYPE_REPEATER: Final = 2
 
+# Platform constants
+PLATFORM_MESSAGE: Final = "message"
+
+# Entity naming constants
+ENTITY_DOMAIN_BINARY_SENSOR: Final = "binary_sensor"
+ENTITY_DOMAIN_SENSOR: Final = "sensor"
+DEFAULT_DEVICE_NAME: Final = "meshcore"
+MESSAGES_SUFFIX: Final = "messages"
+CONTACT_SUFFIX: Final = "contact"
+CHANNEL_PREFIX: Final = "channel_"
+
+# Repeater subscription constants
+CONF_REPEATER_SUBSCRIPTIONS: Final = "repeater_subscriptions"
+CONF_REPEATER_NAME: Final = "repeater_name"
+CONF_REPEATER_PASSWORD: Final = "repeater_password"
+CONF_REPEATER_UPDATE_INTERVAL: Final = "repeater_update_interval"
+DEFAULT_REPEATER_UPDATE_INTERVAL: Final = 300  # 5 minutes in seconds
+
+# Update intervals for different data types
+CONF_INFO_INTERVAL: Final = "info_interval"  # For both node info and contacts
+CONF_MESSAGES_INTERVAL: Final = "messages_interval"
+
+DEFAULT_INFO_INTERVAL: Final = 60  # 1 minute in seconds
+DEFAULT_MESSAGES_INTERVAL: Final = 10   # 10 seconds - base polling interval
+
 # Other constants
 CONNECTION_TIMEOUT: Final = 10  # seconds
+MAX_MESSAGES_HISTORY: Final = 200  # number of messages to keep in history

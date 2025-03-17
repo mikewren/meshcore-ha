@@ -16,6 +16,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
+from homeassistant.helpers.device_registry import async_get as async_get_device_registry
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
@@ -25,6 +27,17 @@ from .const import (
     DOMAIN,
     NODE_TYPE_CLIENT,
     NODE_TYPE_REPEATER,
+    ENTITY_DOMAIN_SENSOR,
+    DEFAULT_DEVICE_NAME,
+    CONF_REPEATER_SUBSCRIPTIONS,
+    CONF_REPEATER_NAME,
+    CONF_REPEATER_PASSWORD,
+    CONF_REPEATER_UPDATE_INTERVAL,
+)
+from .utils import (
+    sanitize_name,
+    get_device_name,
+    format_entity_id,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -138,33 +151,38 @@ CONTACT_SENSORS = [
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:signal",
     ),
-    SensorEntityDescription(
-        key="last_message",
-        name="Last Message",
-        icon="mdi:message-text",
-    ),
-    SensorEntityDescription(
-        key="last_message_time",
-        name="Last Message Time",
-        device_class=SensorDeviceClass.TIMESTAMP,
-        icon="mdi:clock",
-    ),
 ]
 
 # Additional sensors only for repeaters (type 2)
 REPEATER_SENSORS = [
     SensorEntityDescription(
+        key="bat",
+        name="Battery Voltage",
+        device_class=SensorDeviceClass.VOLTAGE,
+        native_unit_of_measurement="V",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:battery",
+    ),
+    SensorEntityDescription(
+        key="battery_percentage",
+        name="Battery Percentage",
+        device_class=SensorDeviceClass.BATTERY,
+        native_unit_of_measurement="%",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:battery",
+    ),
+    SensorEntityDescription(
         key="uptime",
         name="Uptime",
         device_class=SensorDeviceClass.DURATION,
-        native_unit_of_measurement="s",
+        native_unit_of_measurement="min",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:clock",
     ),
     SensorEntityDescription(
         key="airtime",
         name="Airtime",
-        native_unit_of_measurement="s",
+        native_unit_of_measurement="min",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:radio",
     ),
@@ -255,25 +273,6 @@ async def async_setup_entry(
     # Add a contact list sensor to track all contacts
     entities.append(MeshCoreContactListSensor(coordinator))
     
-    # Add a global message tracking sensor
-    entities.append(MeshCoreMessageTrackingSensor(coordinator))
-    
-    # Add per-client message tracking sensors for existing contacts
-    # (new contacts will get sensors when they're discovered)
-    contacts = coordinator.data.get("contacts", [])
-    if contacts:
-        for contact in contacts:
-            if not isinstance(contact, dict):
-                continue
-                
-            contact_name = contact.get("adv_name", "")
-            if contact_name:
-                entities.append(MeshCoreClientMessageSensor(
-                    coordinator, 
-                    contact_name,
-                    contact.get("public_key", "")
-                ))
-    
     # Create a diagnostic sensor for each contact
     contacts = coordinator.data.get("contacts", [])
     if contacts:
@@ -291,8 +290,9 @@ async def async_setup_entry(
                 if not public_key:
                     continue
                     
-                # Create a unique ID for this contact
-                contact_id = f"{entry.entry_id}_contact_{public_key[:10]}"
+                # Create a unique ID for this contact - filter out any empty parts
+                parts = [part for part in [entry.entry_id, "contact", public_key[:10]] if part]
+                contact_id = "_".join(parts)
                 
                 # Create diagnostic sensor for this contact
                 sensor = MeshCoreContactDiagnosticSensor(
@@ -309,6 +309,60 @@ async def async_setup_entry(
             except Exception as ex:
                 _LOGGER.error("Error setting up contact diagnostic sensor: %s", ex)
     
+    # First, handle cleanup of removed repeater devices
+    # Get registries
+    entity_registry = async_get_entity_registry(hass)
+    device_registry = async_get_device_registry(hass)
+    
+    # Add repeater stat sensors if any repeaters are configured
+    repeater_subscriptions = entry.data.get(CONF_REPEATER_SUBSCRIPTIONS, [])
+    repeater_names = {r.get("name") for r in repeater_subscriptions if r.get("name") and r.get("enabled", True)}
+    
+    # Create a set of device IDs for active repeaters
+    active_repeater_device_ids = set()
+    for repeater_name in repeater_names:
+        safe_name = sanitize_name(repeater_name)
+        device_id = f"{entry.entry_id}_repeater_{safe_name}"
+        active_repeater_device_ids.add(device_id)
+    
+    # Find and remove any repeater devices that are no longer in the configuration
+    for device in list(device_registry.devices.values()):
+        # Check if this is a device from this integration
+        for identifier in device.identifiers:
+            if identifier[0] == DOMAIN:
+                device_id = identifier[1]
+                
+                # If this device is a repeater but not in our active list, remove it
+                if "_repeater_" in device_id and device_id not in active_repeater_device_ids:
+                    _LOGGER.info(f"Removing device {device.name} ({device_id}) as it's no longer configured")
+                    device_registry.async_remove_device(device.id)
+    
+    if repeater_subscriptions:
+        _LOGGER.debug("Creating sensors for %d repeater subscriptions", len(repeater_subscriptions))
+        
+        for repeater in repeater_subscriptions:
+            if not repeater.get("enabled", True):
+                continue
+                
+            repeater_name = repeater.get("name")
+            if not repeater_name:
+                continue
+                
+            _LOGGER.info(f"Creating sensors for repeater: {repeater_name}")
+            
+            # Create repeater status sensor
+            for description in REPEATER_SENSORS:
+                try:
+                    # Create a sensor for this repeater stat
+                    sensor = MeshCoreRepeaterSensor(
+                        coordinator,
+                        description,
+                        repeater_name
+                    )
+                    entities.append(sensor)
+                except Exception as ex:
+                    _LOGGER.error(f"Error creating repeater sensor {description.key}: {ex}")
+    
     async_add_entities(entities)
 
 
@@ -324,19 +378,23 @@ class MeshCoreSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self.entity_description = description
         
-        # Set unique ID
-        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_{description.key}"
+        # Set unique ID using consistent format - filter out any empty parts
+        parts = [part for part in [coordinator.config_entry.entry_id, description.key] if part]
+        self._attr_unique_id = "_".join(parts)
         
         # Set name
         self._attr_name = description.name
         
+        # Get raw device name for display purposes
+        raw_device_name = coordinator.data.get('name', 'Node') if coordinator.data else 'Node'
+        
         # Set device info
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, coordinator.config_entry.entry_id)},
-            name=f"MeshCore {coordinator.data.get('name', 'Node')}",
+            name=f"MeshCore {raw_device_name}",
             manufacturer="MeshCore",
             model="Mesh Radio",
-            sw_version=coordinator.data.get("version", "Unknown"),
+            sw_version=coordinator.data.get("version", "Unknown") if coordinator.data else "Unknown",
         )
 
     @property
@@ -537,7 +595,7 @@ class MeshCoreContactDiagnosticSensor(CoordinatorEntity, SensorEntity):
         if not contact:
             # If contact not found, use default icon
             self._attr_icon = "mdi:radio-tower"
-            self._attr_name = f"{self.contact_name}"
+            self._attr_name = self.contact_name
             return {"status": "unknown"}
             
         # Create a copy of the contact data for attributes
@@ -584,11 +642,11 @@ class MeshCoreContactDiagnosticSensor(CoordinatorEntity, SensorEntity):
         if last_advert > 0:
             # Calculate time since last advert
             time_since = time.time() - last_advert
-            # If less than 1 hour, consider online
-            if time_since < 3600:
-                return "online"
+            # If less than 12 hour, consider fresh
+            if time_since < 3600*12:
+                return "fresh"
         
-        return "offline"
+        return "stale"
         
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
@@ -596,97 +654,143 @@ class MeshCoreContactDiagnosticSensor(CoordinatorEntity, SensorEntity):
         return self._update_attributes()
 
 
-class MeshCoreMessageTrackingSensor(CoordinatorEntity, SensorEntity):
-    """Sensor that tracks all mesh network messages."""
-
-    def __init__(self, coordinator: DataUpdateCoordinator) -> None:
-        """Initialize the message tracking sensor."""
-        super().__init__(coordinator)
-        
-        # Set unique ID and name
-        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_message_tracking"
-        self._attr_name = "MeshCore Messages"
-        
-        # Set device info to link to the main device
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, coordinator.config_entry.entry_id)},
-        )
-        
-        # Set icon
-        self._attr_icon = "mdi:message-text"
-        
-    @property
-    def native_value(self) -> str:
-        """Return the number of messages in history."""
-        if hasattr(self.coordinator, "_message_history"):
-            return str(len(self.coordinator._message_history))
-        return "0"
-            
-    @property
-    def extra_state_attributes(self) -> Dict[str, Any]:
-        """Return the message history as attributes."""
-        if hasattr(self.coordinator, "_message_history"):
-            return {
-                "messages": self.coordinator._message_history,
-                "last_updated": datetime.now().isoformat(),
-            }
-        return {
-            "messages": [],
-            "last_updated": datetime.now().isoformat(),
-        }
-
-
-class MeshCoreClientMessageSensor(CoordinatorEntity, SensorEntity):
-    """Sensor that tracks messages for a specific mesh network client."""
-
+class MeshCoreRepeaterSensor(CoordinatorEntity, SensorEntity):
+    """Sensor for repeater statistics."""
+    
     def __init__(
         self, 
-        coordinator: DataUpdateCoordinator, 
-        client_name: str,
-        public_key: str = "",
+        coordinator: DataUpdateCoordinator,
+        description: SensorEntityDescription,
+        repeater_name: str,
     ) -> None:
-        """Initialize the client message tracking sensor."""
+        """Initialize the repeater stat sensor."""
         super().__init__(coordinator)
+        self.entity_description = description
+        self.repeater_name = repeater_name
         
-        self.client_name = client_name
-        self.public_key = public_key
+        # Create sanitized names
+        safe_name = sanitize_name(repeater_name)
         
-        # Set unique ID and name
-        safe_name = client_name.lower().replace(" ", "_")
-        self._attr_unique_id = f"{coordinator.config_entry.entry_id}_client_{safe_name}"
-        self._attr_name = f"{client_name} Messages"
+        # Generate a unique device_id for this repeater
+        self.device_id = f"{coordinator.config_entry.entry_id}_repeater_{safe_name}"
         
-        # Set device info to link to the main device
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, coordinator.config_entry.entry_id)},
+        # Set unique ID
+        self._attr_unique_id = f"{self.device_id}_{description.key}"
+        
+        # Set friendly name
+        self._attr_name = description.name
+        
+        # Set entity ID
+        self.entity_id = format_entity_id(
+            ENTITY_DOMAIN_SENSOR,
+            safe_name,
+            description.key
         )
         
-        # Set icon
-        self._attr_icon = "mdi:message-text-outline"
+        # Set device info to create a separate device for this repeater
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, self.device_id)},
+            name=f"MeshCore Repeater: {repeater_name}",
+            manufacturer="MeshCore",
+            model="Mesh Repeater",
+            via_device=(DOMAIN, coordinator.config_entry.entry_id),  # Link to the main device
+        )
+    
+    @property
+    def native_value(self) -> Any:
+        """Return the sensor value."""
+        if not self.coordinator.data or "repeater_stats" not in self.coordinator.data:
+            return None
+            
+        # Get the repeater stats for this repeater
+        repeater_stats = self.coordinator.data.get("repeater_stats", {}).get(self.repeater_name, {})
+        if not repeater_stats:
+            return None
+        
+        key = self.entity_description.key
+        
+        # Special handling for battery voltage - convert from mV to V
+        if key == "bat":
+            bat_value = repeater_stats.get("bat")
+            if isinstance(bat_value, (int, float)) and bat_value > 0:
+                # Convert from millivolts to volts
+                return bat_value / 1000.0
+            return None
+        elif key == "battery_percentage":
+            bat_value = repeater_stats.get("bat")
+            if isinstance(bat_value, (int, float)) and bat_value > 0:
+                voltage = bat_value / 1000.0  # Convert mV to V
+                # Calculate percentage based on min/max voltage range
+                percentage = ((voltage - MIN_BATTERY_VOLTAGE) / 
+                             (MAX_BATTERY_VOLTAGE - MIN_BATTERY_VOLTAGE)) * 100
+                
+                # Ensure percentage is within 0-100 range
+                percentage = max(0, min(100, percentage))
+                return round(percentage, 1)  # Round to 1 decimal place
+            return None
+        elif key == "uptime":
+            # Convert from seconds to minutes
+            seconds = repeater_stats.get("uptime")
+            if isinstance(seconds, (int, float)) and seconds > 0:
+                return round(seconds / 60, 1)  # Convert to minutes and round to 1 decimal
+            return None
+        elif key == "airtime":
+            # Convert from seconds to minutes
+            seconds = repeater_stats.get("airtime")
+            if isinstance(seconds, (int, float)) and seconds > 0:
+                return round(seconds / 60, 1)  # Convert to minutes and round to 1 decimal
+            return None
+            
+        # Get the value from the repeater stats for other sensors
+        return repeater_stats.get(key)
         
     @property
-    def native_value(self) -> str:
-        """Return the number of messages for this client."""
-        if hasattr(self.coordinator, "_client_message_history"):
-            if self.client_name in self.coordinator._client_message_history:
-                return str(len(self.coordinator._client_message_history[self.client_name]))
-        return "0"
+    def available(self) -> bool:
+        """Return if the sensor is available."""
+        # Check if coordinator is available and we have data for this repeater
+        if not super().available or not self.coordinator.data:
+            return False
             
+        # Check if we have stats for this repeater
+        repeater_stats = self.coordinator.data.get("repeater_stats", {})
+        return self.repeater_name in repeater_stats
+        
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
-        """Return the client's message history as attributes."""
-        if hasattr(self.coordinator, "_client_message_history"):
-            if self.client_name in self.coordinator._client_message_history:
-                return {
-                    "messages": self.coordinator._client_message_history[self.client_name],
-                    "client_name": self.client_name,
-                    "public_key": self.public_key,
-                    "last_updated": datetime.now().isoformat(),
-                }
+        """Return additional state attributes."""
+        if not self.coordinator.data or "repeater_stats" not in self.coordinator.data:
+            return {}
+            
+        # Get the repeater stats for this repeater
+        repeater_stats = self.coordinator.data.get("repeater_stats", {}).get(self.repeater_name, {})
+        if not repeater_stats:
+            return {}
+            
+        attributes = {}
+        key = self.entity_description.key
         
-        return {
-            "messages": [],
-            "client_name": self.client_name,
-            "public_key": self.public_key,
-            "last_updated": datetime.now().isoformat(),
-        }
+        # Add raw values for certain sensors to help with debugging
+        if key == "bat":
+            bat_value = repeater_stats.get("bat")
+            if isinstance(bat_value, (int, float)) and bat_value > 0:
+                attributes["raw_millivolts"] = bat_value
+        elif key in ["uptime", "airtime"]:
+            seconds = repeater_stats.get(key)
+            if isinstance(seconds, (int, float)) and seconds > 0:
+                attributes["raw_seconds"] = seconds
+                
+                # Also add a human-readable format for uptime
+                if key == "uptime":
+                    days = seconds // 86400
+                    hours = (seconds % 86400) // 3600
+                    minutes = (seconds % 3600) // 60
+                    secs = seconds % 60
+                    attributes["human_readable"] = f"{days}d {hours}h {minutes}m {secs}s"
+                    
+        return attributes
+
+
+
+
+
+

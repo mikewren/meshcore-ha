@@ -82,10 +82,6 @@ class SerialConnection:
         self.mc = mc
 
     def handle_rx(self, data: bytearray):
-        # Log raw received data for debugging
-        if self.mc and hasattr(self.mc, 'log_debug'):
-            self.mc.log_debug(f"Serial RX raw: {data.hex()}")
-        
         headerlen = len(self.header)
         framelen = len(self.inframe)
         if not self.frame_started : # wait start of frame
@@ -93,25 +89,16 @@ class SerialConnection:
                 self.header = self.header + data[:3-headerlen]
                 self.frame_started = True
                 self.frame_size = int.from_bytes(self.header[1:], byteorder='little')
-                if self.mc and hasattr(self.mc, 'log_debug'):
-                    self.mc.log_debug(f"Serial frame started, size={self.frame_size}")
                 self.handle_rx(data[3-headerlen:])
             else:
                 self.header = self.header + data
         else:
             if framelen + len(data) < self.frame_size:
                 self.inframe = self.inframe + data
-                if self.mc and hasattr(self.mc, 'log_debug'):
-                    self.mc.log_debug(f"Serial frame partial: {len(self.inframe)}/{self.frame_size} bytes")
             else:
                 self.inframe = self.inframe + data[:self.frame_size-framelen]
-                if self.mc and hasattr(self.mc, 'log_debug'):
-                    self.mc.log_debug(f"Serial frame complete: {self.frame_size} bytes, data={self.inframe.hex()}")
                 if not self.mc is None:
-                    try:
-                        self.mc.handle_rx(self.inframe)
-                    except Exception as ex:
-                        printerr(f"Error handling frame: {ex}")
+                    self.mc.handle_rx(self.inframe)
                 self.frame_started = False
                 self.header = b""
                 self.inframe = b""
@@ -162,28 +149,16 @@ class TCPConnection:
         self.mc = mc
 
     def handle_rx(self, data: bytearray):
-        # Log raw received data for debugging
-        if self.mc and hasattr(self.mc, 'log_debug'):
-            self.mc.log_debug(f"TCP RX raw: {data.hex()}")
-            
         cur_data = data
         while (len(cur_data) > 0) :
             if cur_data[0] != 0x3E :
-                if self.mc and hasattr(self.mc, 'log_debug'):
-                    self.mc.log_debug(f"Error with received frame, invalid first byte: 0x{cur_data[0]:02x}")
                 printerr(f"Error with received frame trying anyway ... first byte is {cur_data[0]}")
         
             frame_size = int.from_bytes(cur_data[1:2], byteorder='little')
             frame = cur_data[3:3+frame_size]
-            
-            if self.mc and hasattr(self.mc, 'log_debug'):
-                self.mc.log_debug(f"TCP frame complete: {frame_size} bytes, data={frame.hex()}")
 
             if not self.mc is None:
-                try:
-                    self.mc.handle_rx(frame)
-                except Exception as ex:
-                    printerr(f"Error handling TCP data: {ex}")
+                self.mc.handle_rx(frame)
         
             cur_data = cur_data[3+frame_size:]
 
@@ -252,15 +227,8 @@ class BLEConnection:
         self.mc = mc
 
     def handle_rx(self, _: BleakGATTCharacteristic, data: bytearray):
-        # Log raw received data for debugging
-        if self.mc and hasattr(self.mc, 'log_debug'):
-            self.mc.log_debug(f"BLE RX raw: {data.hex()}")
-            
         if not self.mc is None:
-            try:
-                self.mc.handle_rx(data)
-            except Exception as ex:
-                printerr(f"Error handling BLE data: {ex}")
+            self.mc.handle_rx(data)
 
     async def send(self, data):
         await self.client.write_gatt_char(self.rx_char, bytes(data), response=False)
@@ -272,8 +240,8 @@ class MeshCore:
     self_info={}
     contacts={}
 
-    def __init__(self, cx, logger=None):
-        """ Constructor : specify address and optional logger """
+    def __init__(self, cx):
+        """ Constructor : specify address """
         self.time = 0
         self.result = asyncio.Future()
         self.contact_nb = 0
@@ -281,45 +249,22 @@ class MeshCore:
         self.ack_ev = asyncio.Event()
         self.login_resp = asyncio.Future()
         self.status_resp = asyncio.Future()
-        
-        # Add logger support
-        self.logger = logger
-        
+
         self.cx = cx
         cx.set_mc(self)
-        
-    def log_debug(self, message):
-        """Log a debug message if logger is available"""
-        if self.logger:
-            self.logger.debug(message)
-        else:
-            # Fall back to printerr for CLI usage
-            printerr(message)
 
     async def connect(self) :
-        """Initialize the connection by sending APPSTART command"""
-        self.log_debug("Initializing connection with APPSTART command")
-        result = await self.send_appstart()
-        self.log_debug(f"APPSTART result: {result}")
-        return result
+        await self.send_appstart()
 
     def handle_rx(self, data: bytearray):
         """ Callback to handle received data """
-        # Log the raw data packet
-        self.log_debug(f"RX data[0]={data[0]} (0x{data[0]:02x}), length={len(data)}, raw={data.hex()}")
-        
         match data[0]:
             case 0: # ok
-                self.log_debug(f"OK response: {data[1:].hex()}")
                 if len(data) == 5 :  # an integer
-                    value = int.from_bytes(data[1:5], byteorder='little')
-                    self.log_debug(f"Integer result: {value}")
-                    self.result.set_result(value)
+                    self.result.set_result(int.from_bytes(data[1:5], byteorder='little'))
                 else:
-                    self.log_debug("Boolean TRUE result")
                     self.result.set_result(True)
             case 1: # error
-                self.log_debug(f"ERROR response: {data[1:].hex()}")
                 self.result.set_result(False)
             case 2: # contact start
                 self.contact_nb = int.from_bytes(data[1:5], byteorder='little')
@@ -329,8 +274,8 @@ class MeshCore:
                 c["public_key"] = data[1:33].hex()
                 c["type"] = data[33]
                 c["flags"] = data[34]
-                c["out_path_len"] = int.from_bytes(data[35:36], byteorder='little', signed=True)
-                plen = int.from_bytes(data[35:36], byteorder='little', signed=True)
+                c["out_path_len"] = int.from_bytes(data[35:36], signed=True)
+                plen = int.from_bytes(data[35:36], signed=True)
                 if plen == -1 : 
                     plen = 0
                 c["out_path"] = data[36:36+plen].hex()
@@ -343,7 +288,6 @@ class MeshCore:
             case 4: # end of contacts
                 self.result.set_result(self.contacts)
             case 5: # self info
-                self.log_debug("Received node self info packet - parsing")
                 self.self_info["adv_type"] = data[1]
                 self.self_info["tx_power"] = data[2]
                 self.self_info["max_tx_power"] = data[3]
@@ -356,14 +300,6 @@ class MeshCore:
                 self.self_info["radio_sf"] = data[56]
                 self.self_info["radio_cr"] = data[57]
                 self.self_info["name"] = data[58:].decode()
-                
-                # Log key device information
-                self.log_debug(f"Node name: {self.self_info['name']}")
-                self.log_debug(f"Node info: power={self.self_info['tx_power']}dBm, " +
-                              f"freq={self.self_info['radio_freq']/1000}MHz, " +
-                              f"SF={self.self_info['radio_sf']}")
-                
-                self.log_debug("Setting result to TRUE for self info response")
                 self.result.set_result(True)
             case 6: # msg sent
                 res = {}
@@ -459,32 +395,20 @@ class MeshCore:
         """ Helper function to synchronously send (and receive) data to the node """
         self.result = asyncio.Future()
         try:
-            # Log the data being sent
-            self.log_debug(f"TX send: type=0x{data[0]:02x}, data={data.hex()}")
-            
             await self.cx.send(data)
             res = await asyncio.wait_for(self.result, timeout)
-            
-            # Log the result
-            self.log_debug(f"TX response received: {res}")
             return res
         except TimeoutError :
-            self.log_debug(f"Timeout while sending message type 0x{data[0]:02x}")
             printerr ("Timeout while sending message ...")
             return False
 
     async def send_only(self, data): # don't wait reply
-        # Log the data being sent
-        self.log_debug(f"TX send_only: type=0x{data[0]:02x}, data={data.hex()}")
         await self.cx.send(data)
 
     async def send_appstart(self):
         """ Send APPSTART to the node """
-        self.log_debug("Sending APPSTART command to initialize communication")
         b1 = bytearray(b'\x01\x03      mccli')
-        result = await self.send(b1)
-        self.log_debug(f"APPSTART command result: {result}")
-        return result
+        return await self.send(b1)
 
     async def send_advert(self):
         """ Make the node send an advertisement """
@@ -532,17 +456,7 @@ class MeshCore:
 
     async def get_contacts(self):
         """ Starts retreiving contacts """
-        self.log_debug("Requesting contacts list from device")
-        result = await self.send(b"\x04")
-        
-        if isinstance(result, dict) and len(result) > 0:
-            self.log_debug(f"Retrieved {len(result)} contacts")
-            for name, contact in result.items():
-                self.log_debug(f"Contact: {name}, type: {contact.get('type')}, last seen: {contact.get('last_advert')}")
-        else:
-            self.log_debug(f"No contacts returned or invalid response: {result}")
-            
-        return result
+        return await self.send(b"\x04")
 
     async def ensure_contacts(self):
         if len(self.contacts) == 0 :
@@ -881,5 +795,4 @@ async def main(argv):
     while len(cmds) > 0 :
         cmds = await next_cmd(mc, cmds)
 
-if __name__ == "__main__":
-    asyncio.run(main(sys.argv[1:]))
+asyncio.run(main(sys.argv[1:]))

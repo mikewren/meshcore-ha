@@ -14,6 +14,22 @@ from .const import (
     DOMAIN,
     NODE_TYPE_CLIENT,
     NODE_TYPE_REPEATER,
+    PLATFORM_MESSAGE,
+    ENTITY_DOMAIN_BINARY_SENSOR,
+    ENTITY_DOMAIN_SENSOR,
+    MESSAGES_SUFFIX,
+    CONTACT_SUFFIX,
+    CHANNEL_PREFIX,
+    DEFAULT_DEVICE_NAME,
+)
+from .utils import (
+    sanitize_name,
+    get_device_name,
+    format_entity_id,
+    get_channel_entity_id,
+    get_contact_entity_id,
+    extract_channel_idx,
+    find_coordinator_with_device_name,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -41,16 +57,30 @@ def async_describe_events(
         
         # Determine message description
         if outgoing:
-            description = f"Sent message to {data.get('receiver', 'Unknown')}"
+            receiver = data.get('receiver', 'Unknown')
+            pub_key_short = data.get('client_public_key', '')[:6] if data.get('client_public_key') else ''
+            if pub_key_short:
+                description = f"Sent to {receiver} ({pub_key_short}): {message}"
+            else:
+                description = f"Sent to {receiver}: {message}"
+            icon = "mdi:message-arrow-right-outline"
         elif message_type == "channel" and channel:
-            description = f"Channel message in {channel}"
+            # For channel messages, we already have sender in the message format
+            description = f"<{channel}> {message}"
+            icon = "mdi:message-bulleted"
         else:
-            description = f"Message from {sender_name}"
+            pub_key_short = data.get('client_public_key', '')[:6] if data.get('client_public_key') else ''
+            if pub_key_short:
+                description = f"{sender_name} ({pub_key_short}): {message}"
+            else:
+                description = f"{sender_name}: {message}"
+            icon = "mdi:message-text"
         
         return {
             "name": sender_name,
             "message": message,
             "domain": DOMAIN,
+            "icon": icon,
         }
         
     @callback
@@ -64,6 +94,7 @@ def async_describe_events(
             "name": contact_name,
             "message": f"New {contact_type} discovered",
             "domain": DOMAIN,
+            "icon": "mdi:account-plus",
         }
     
     @callback
@@ -74,15 +105,25 @@ def async_describe_events(
         message = data.get("message", "")
         is_incoming = data.get("is_incoming", True)
         
+        pub_key_short = data.get('client_public_key', '')[:6] if data.get('client_public_key') else ''
         if is_incoming:
-            description = f"Received message from {client_name}"
+            if pub_key_short:
+                description = f"{client_name} ({pub_key_short}): {message}"
+            else:
+                description = f"{client_name}: {message}"
+            icon = "mdi:message-text"
         else:
-            description = f"Sent message to {client_name}"
+            if pub_key_short:
+                description = f"Sent to {client_name} ({pub_key_short}): {message}"
+            else:
+                description = f"Sent to {client_name}: {message}"
+            icon = "mdi:message-arrow-right-outline"
         
         return {
             "name": client_name,
             "message": message,
             "domain": DOMAIN,
+            "icon": icon,
         }
         
     async_describe_event(DOMAIN, EVENT_MESHCORE_MESSAGE, process_message_event)
@@ -94,15 +135,22 @@ def log_message(hass: HomeAssistant, message_data: Dict[str, Any]) -> None:
     if not message_data:
         return
         
+    # Find the coordinator and get the device name
+    coordinator, device_name = find_coordinator_with_device_name(hass.data)
+        
     # Extract message data
-    message_text = message_data.get("msg", "")
-    sender_key = message_data.get("sender", "")
+    message_text = message_data.get("text", message_data.get("msg", ""))  # Try both text and msg fields
+    sender_key = message_data.get("pubkey_prefix", message_data.get("sender", ""))  # Try both formats
     sender_name = "Unknown"
     receiver_name = message_data.get("receiver", "Unknown")
-    channel = message_data.get("channel", "")
+    channel = message_data.get("channel_idx", message_data.get("channel", ""))  # Try both formats
     message_type = "direct"  # Default to direct message
     outgoing = message_data.get("outgoing", False)
     contact_public_key = None
+    
+    # Use message type if it's already specified
+    if "type" in message_data:
+        message_type = message_data["type"]
     
     # Find coordinator and get contact data
     coordinator = None
@@ -142,49 +190,64 @@ def log_message(hass: HomeAssistant, message_data: Dict[str, Any]) -> None:
                     contact_public_key = contact.get("public_key")
                     break
                 
-    # Determine message type
-    if channel:
+    # Determine message type if not already set from input
+    if message_type != "CHAN" and channel:
         message_type = "channel"
+    elif message_type == "CHAN":
+        message_type = "channel"
+        
+    # Try to extract sender name from channel message if it matches pattern: "Name: message"
+    if message_type == "channel" and message_text and ":" in message_text:
+        parts = message_text.split(":", 1)
+        if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+            extracted_sender = parts[0].strip()
+            extracted_message = parts[1].strip()
+            # Only update sender if we don't already have one
+            if sender_name == "Unknown":
+                sender_name = extracted_sender
+                _LOGGER.debug(f"Extracted sender name '{sender_name}' from channel message")
+            # Update the message text to show without the sender prefix
+            message_text = extracted_message
     
     # First, log to the standard message event
     if outgoing:
         event_type = "send_message"
         event_name = f"Sent message to {receiver_name}"
-    elif message_type == "channel" and channel:
+    elif message_type == "channel" or message_type == "CHAN":
         event_type = "channel_message"
-        event_name = f"Channel message in {channel}"
+        channel_id = channel if channel else 0  # Default to channel 0 if not specified
+        event_name = f"Channel {channel_id} message"
     else:
         event_type = "receive_message"
         event_name = f"Message from {sender_name}"
         
-    # Create general message event data
-    event_data = {
-        "name": event_name,
-        "message": message_text,
-        "message_type": message_type,
-        "sender_name": sender_name,
-        "entity_id": f"{DOMAIN}.message_tracking",
-        "domain": DOMAIN,
-        "outgoing": outgoing,
-    }
     
-    # Fire general message event
-    hass.bus.async_fire(EVENT_MESHCORE_MESSAGE, event_data)
-    
-    # Then, log to client-specific event if we have client info
-    if sender_name != "Unknown" or receiver_name != "Unknown":
+    # Then, log to client-specific event if this is a direct message (not a channel message)
+    # and we have client info
+    if (message_type != "channel" and message_type != "CHAN") and (sender_name != "Unknown" or receiver_name != "Unknown"):
         client_name = sender_name if not outgoing else receiver_name
         
+        # Format message with contact public key prefix
+        formatted_message = f"<{contact_public_key[:4]}> {message_text}"
+
         # Create client message event data
         client_event_data = {
             "client_name": client_name,
-            "message": message_text,
+            "message": formatted_message,
+            "text": formatted_message,  # Add text field to ensure compatibility
             "is_incoming": not outgoing,
-            "entity_id": f"{DOMAIN}.client_{client_name.lower().replace(' ', '_')}",
+            "entity_id": get_contact_entity_id(ENTITY_DOMAIN_BINARY_SENSOR, device_name, client_name),  # Use utility function
             "domain": DOMAIN,
             "client_public_key": contact_public_key,
             "timestamp": datetime.now().isoformat(),
+            "message_type": "direct",  # Explicitly mark as direct message
+            "name": client_name,  # Add name for consistency
         }
+        
+        # Add the channel information if it's a channel message
+        if message_type == "channel" and channel:
+            client_event_data["channel"] = channel
+            client_event_data["channel_idx"] = channel
         
         # Fire client-specific message event
         hass.bus.async_fire(EVENT_MESHCORE_CLIENT_MESSAGE, client_event_data)
@@ -194,24 +257,70 @@ def log_message(hass: HomeAssistant, message_data: Dict[str, Any]) -> None:
         # Create history entry
         history_entry = {
             "text": message_text,
+            "message": message_text,  # Add for compatibility
             "sender": sender_name,
             "receiver": receiver_name,
             "type": message_type,
+            "message_type": message_type,  # Add for compatibility
             "channel": channel,
+            "channel_idx": channel if channel else None,  # Add for compatibility
             "outgoing": outgoing,
             "timestamp": datetime.now().isoformat(),
+            "pubkey_prefix": sender_key,  # Add the sender key for reference
         }
         
         # Add to global history
         coordinator._message_history.append(history_entry)
         
-        # Keep only last 50 messages
-        if len(coordinator._message_history) > 50:
-            coordinator._message_history = coordinator._message_history[-50:]
+        # Keep only the last MAX_MESSAGES_HISTORY messages
+        from .const import MAX_MESSAGES_HISTORY
+        if len(coordinator._message_history) > MAX_MESSAGES_HISTORY:
+            coordinator._message_history = coordinator._message_history[-MAX_MESSAGES_HISTORY:]
         
-        # Also store in per-client history 
-        client_name = sender_name if not outgoing else receiver_name
-        if client_name != "Unknown":
+        # For channel messages, store in channel history
+        if (message_type == "channel" or message_type == "CHAN") and channel is not None:
+            channel_idx = int(channel) if isinstance(channel, (int, str)) and str(channel).isdigit() else 0
+            
+            # Initialize channel history dict if needed
+            if not hasattr(coordinator, "_channel_message_history"):
+                coordinator._channel_message_history = {}
+                
+            # Initialize this channel's history if needed
+            if channel_idx not in coordinator._channel_message_history:
+                coordinator._channel_message_history[channel_idx] = []
+                
+            # Add to channel's history
+            coordinator._channel_message_history[channel_idx].append(history_entry)
+            
+            # Keep only the latest messages
+            if len(coordinator._channel_message_history[channel_idx]) > MAX_MESSAGES_HISTORY:
+                coordinator._channel_message_history[channel_idx] = coordinator._channel_message_history[channel_idx][-MAX_MESSAGES_HISTORY:]
+            
+            # Create entity ID for logbook using utility function
+            entity_id = get_channel_entity_id(ENTITY_DOMAIN_BINARY_SENSOR, device_name, channel_idx)
+            
+            # Add channel-specific info to the event data
+            # Format message with channel index
+            formatted_message = f"<{channel_idx}> {message_text}"
+            
+            channel_event_data = {
+                "name": sender_name if sender_name != "Unknown" else f"Channel {channel_idx}",
+                "message": formatted_message,
+                "text": message_text,
+                "sender": sender_name,
+                "sender_name": sender_name,  # Add sender_name for consistency
+                "entity_id": entity_id,
+                "channel_idx": channel_idx,
+                "timestamp": datetime.now().isoformat(),
+                "domain": DOMAIN,
+                "message_type": "channel",  # Explicitly mark as channel message
+            }
+            
+            # Fire channel-specific event for logbook
+            hass.bus.async_fire(EVENT_MESHCORE_MESSAGE, channel_event_data)
+        
+        # For direct messages only (not channel messages), store in client history
+        elif (message_type != "channel" and message_type != "CHAN") and client_name != "Unknown":
             # Initialize client history dict if needed
             if not hasattr(coordinator, "_client_message_history"):
                 coordinator._client_message_history = {}
@@ -223,9 +332,9 @@ def log_message(hass: HomeAssistant, message_data: Dict[str, Any]) -> None:
             # Add to client's history
             coordinator._client_message_history[client_name].append(history_entry)
             
-            # Keep only last 50 messages per client
-            if len(coordinator._client_message_history[client_name]) > 50:
-                coordinator._client_message_history[client_name] = coordinator._client_message_history[client_name][-50:]
+            # Keep only the last MAX_MESSAGES_HISTORY messages per client
+            if len(coordinator._client_message_history[client_name]) > MAX_MESSAGES_HISTORY:
+                coordinator._client_message_history[client_name] = coordinator._client_message_history[client_name][-MAX_MESSAGES_HISTORY:]
         
         # Trigger coordinator update to refresh sensors
         coordinator.async_set_updated_data(coordinator.data)
@@ -256,7 +365,7 @@ def log_contact_seen(hass: HomeAssistant, contact_data: Dict[str, Any]) -> None:
         "contact_type": contact_type,
         "public_key": public_key,
         "node_type": node_type,
-        "entity_id": f"{DOMAIN}.contact_{contact_name.lower().replace(' ', '_')}",
+        "entity_id": get_contact_entity_id(ENTITY_DOMAIN_SENSOR, DEFAULT_DEVICE_NAME, contact_name, CONTACT_SUFFIX),
         "domain": DOMAIN,
     }
     
@@ -268,7 +377,7 @@ def log_contact_seen(hass: HomeAssistant, contact_data: Dict[str, Any]) -> None:
         "client_name": contact_name,
         "message": f"New {contact_type.lower()} device discovered",
         "is_incoming": False,  # System message
-        "entity_id": f"{DOMAIN}.client_{contact_name.lower().replace(' ', '_')}",
+        "entity_id": get_contact_entity_id(ENTITY_DOMAIN_SENSOR, DEFAULT_DEVICE_NAME, contact_name, "message"),  # Use utility function
         "domain": DOMAIN,
         "client_public_key": public_key,
         "timestamp": datetime.now().isoformat(),

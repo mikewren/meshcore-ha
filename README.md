@@ -1,6 +1,12 @@
+![MeshCore Banner](images/meshcore-bg.png)
+
 # MeshCore for Home Assistant
 
 This is a custom Home Assistant integration for MeshCore mesh radio nodes. It allows you to monitor and control MeshCore nodes via USB, BLE, or TCP connections.
+
+> :warning: **Work in Progress**: This integration is under active development. BLE and TCP connection methods haven't been thoroughly tested yet.
+
+Core integration is powered by [mccli.py](https://github.com/fdlamotte/mccli/blob/main/mccli.py) from fdlamotte.
 
 ## Features
 
@@ -9,6 +15,8 @@ This is a custom Home Assistant integration for MeshCore mesh radio nodes. It al
 - View messages received by the mesh network
 - Send messages to other nodes in the network
 - Automatically discover nodes in the mesh network and create sensors for them
+- Track and monitor repeater nodes with detailed statistics
+- Configurable update intervals for different data types (messages, device info, repeaters)
 
 ## Installation
 
@@ -37,7 +45,10 @@ This is a custom Home Assistant integration for MeshCore mesh radio nodes. It al
    - For USB: Select the USB port and set the baud rate (default: 115200)
    - For BLE: Select your MeshCore device from the discovered devices or enter the address manually
    - For TCP: Enter the hostname/IP and port of your MeshCore device
-   - Set the update interval (how often to poll for status updates)
+   - Configure update intervals for different data types:
+     - Messages interval: How often to poll for new messages (default: 10 seconds)
+     - Device info interval: How often to update device statistics (default: 60 seconds)
+     - Repeater update interval: How often to poll repeater nodes (default: 300 seconds)
 
 ## Available Sensors
 
@@ -57,6 +68,13 @@ For remote nodes (automatically created for each node in the network):
 - **Signal Strength**: RSSI of the last received packet from that node
 - **Battery**: Battery level of the remote node (if available)
 - **Last Message**: Most recent message received from that node
+
+For repeater nodes:
+- **Battery Voltage**: Battery voltage in volts
+- **Battery Percentage**: Estimated battery level percentage
+- **Uptime**: How long the repeater has been running (in minutes)
+- **Airtime**: Total radio airtime used by the repeater (in minutes)
+- **Temperature**: Internal temperature of the repeater (if available)
 
 ## Services
 
@@ -87,11 +105,19 @@ data:
 - **BLE Connection**: Ensure Bluetooth is enabled on your Home Assistant host. Try moving closer to the device if signal strength is low.
 - **TCP Connection**: Verify the hostname/IP and port are correct and that there are no firewalls blocking the connection.
 
+### Repeater Issues
+
+- If repeaters aren't appearing, check that your node has correct time synchronization
+- Verify the public key used for repeater login is correct
+- Try increasing the repeater update interval if connections are unreliable
+- Check the Home Assistant logs for detailed error messages related to repeater connections
+
 ### Integration Not Working
 
 - Check the Home Assistant logs for error messages related to the MeshCore integration
 - Verify that your MeshCore device is working correctly (try using the MeshCore CLI directly)
 - Make sure you have the required permissions to access the device (especially for USB devices)
+- Try adjusting the update intervals if you're experiencing performance issues
 
 ## Support and Development
 

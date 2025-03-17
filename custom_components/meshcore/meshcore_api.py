@@ -77,6 +77,7 @@ class MeshCoreAPI:
                 
                 # Establish the connection
                 address = await self._connection.connect()
+                _LOGGER.info(f"Established Address {address}")
                 
                 # Add a longer delay for serial connection to stabilize
                 # Increased from the original implementation for more stability
@@ -104,37 +105,34 @@ class MeshCoreAPI:
                 _LOGGER.error("Failed to connect to MeshCore device")
                 return False
                 
-            # Create MeshCore instance with the connection
-            self._mesh_core = MeshCore(self._connection)
+            # Create MeshCore instance with the connection and logger
+            self._mesh_core = MeshCore(self._connection, logger=_LOGGER)
             
             # Wait a bit before initializing
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.1)
             
             # Initialize the connection to the device
             _LOGGER.info("Initializing connection to MeshCore device...")
-            try:
-                init_success = await self._mesh_core.connect()
-                if not init_success:
-                    _LOGGER.error("Failed to initialize MeshCore connection")
-                    return False
-            except UnicodeDecodeError as e:
-                # Special handling for decode errors which are common
-                _LOGGER.error(f"Unicode decode error during initialization: {e}")
-                _LOGGER.info("Attempting manual initialization sequence...")
-                
-                # Try a manual approach - just send APPSTART but don't expect a response
-                try:
-                    await self._mesh_core.send_only(b'\x01\x03      mccli')
-                    
-                    # Give the device time to process
-                    await asyncio.sleep(0.5)
-                    
-                    # Assume it worked and continue
-                    _LOGGER.info("Manual initialization completed")
-                except Exception as manual_ex:
-                    _LOGGER.error(f"Manual initialization also failed: {manual_ex}")
-                    return False
+
+            init_success = await self._mesh_core.connect()
+            if not init_success:
+                _LOGGER.error("Failed to initialize MeshCore connection")
+                return False
             
+            # Sync time to ensure proper authentication
+            try:
+                _LOGGER.info("Synchronizing device time...")
+                current_time = int(time.time())
+                time_result = await self._mesh_core.set_time(current_time)
+                if time_result:
+                    _LOGGER.info(f"Successfully synchronized device time to {current_time}")
+                    # Wait a moment for the time change to take effect
+                    await asyncio.sleep(0.2)
+                else:
+                    _LOGGER.warning("Time synchronization failed, authentication might not work properly")
+            except Exception as time_ex:
+                _LOGGER.warning(f"Error during time synchronization: {time_ex}")
+                
             self._connected = True
             _LOGGER.info("Successfully connected to MeshCore device")
             return True
@@ -148,10 +146,32 @@ class MeshCoreAPI:
     
     async def disconnect(self) -> None:
         """Disconnect from the MeshCore device."""
-        self._connected = False
-        self._connection = None
-        self._mesh_core = None
-        _LOGGER.info("Disconnected from MeshCore device")
+        try:
+            # Ensure proper cleanup of any transport objects
+            if self._connection and hasattr(self._connection, 'transport') and self._connection.transport:
+                try:
+                    if hasattr(self._connection.transport, 'close'):
+                        self._connection.transport.close()
+                    elif hasattr(self._connection.transport, 'serial') and hasattr(self._connection.transport.serial, 'close'):
+                        self._connection.transport.serial.close()
+                except Exception as ex:
+                    _LOGGER.error(f"Error while closing transport: {ex}")
+                    
+            # For BLE connection, ensure the client is disconnected
+            if self._connection and isinstance(self._connection, BLEConnection) and self._connection.client:
+                try:
+                    if self._connection.client.is_connected:
+                        await self._connection.client.disconnect()
+                except Exception as ex:
+                    _LOGGER.error(f"Error while disconnecting BLE client: {ex}")
+        except Exception as ex:
+            _LOGGER.error(f"Error during disconnect: {ex}")
+        finally:
+            # Always reset these values
+            self._connected = False
+            self._connection = None
+            self._mesh_core = None
+            _LOGGER.info("Disconnected from MeshCore device")
         return
     
     async def get_node_info(self) -> Dict[str, Any]:
@@ -163,12 +183,19 @@ class MeshCoreAPI:
         async with self._device_lock:
             try:
                 # Retrieve node info using the MeshCore instance
-                _LOGGER.debug("Getting node info...")
+                _LOGGER.info("Requesting full node information via APPSTART command")
                 success = await self._mesh_core.send_appstart()
                 if not success:
-                    _LOGGER.error("Failed to initialize app session")
+                    _LOGGER.error("Failed to initialize app session to get node info")
                     return {}
-                    
+                
+                # Display helpful info about key node parameters
+                radio_freq = self._mesh_core.self_info.get("radio_freq", 0) / 1000
+                tx_power = self._mesh_core.self_info.get("tx_power", 0)
+                node_name = self._mesh_core.self_info.get("name", "Unknown")
+                
+                _LOGGER.info(f"Node info received - Name: {node_name}, Freq: {radio_freq}MHz, Power: {tx_power}dBm")
+                
                 # The self_info attribute is updated when appstart is called
                 # We need to make a copy to avoid reference issues
                 self._node_info = self._mesh_core.self_info.copy()
@@ -207,12 +234,32 @@ class MeshCoreAPI:
         async with self._device_lock:
             try:
                 # Retrieve contacts using the MeshCore instance
-                _LOGGER.debug("Getting contacts...")
+                _LOGGER.info("Requesting contacts list from device...")
                 contacts = await self._mesh_core.get_contacts()
                 
                 if contacts and isinstance(contacts, dict):
                     self._cached_contacts = contacts
-                    _LOGGER.debug("Retrieved %d contacts", len(contacts))
+                    contact_count = len(contacts)
+                    
+                    if contact_count > 0:
+                        _LOGGER.info(f"Retrieved {contact_count} contacts")
+                        
+                        # Log details about each contact for debugging
+                        for name, contact in contacts.items():
+                            node_type = "Client" if contact.get("type") == 1 else "Repeater" if contact.get("type") == 2 else "Unknown"
+                            last_seen = contact.get("last_advert", 0)
+                            
+                            # Convert to human-readable time if available
+                            if last_seen > 0:
+                                from datetime import datetime
+                                last_seen_str = datetime.fromtimestamp(last_seen).strftime("%Y-%m-%d %H:%M:%S")
+                            else:
+                                last_seen_str = "Never"
+                                
+                            _LOGGER.info(f"Contact: '{name}' ({node_type}), Last seen: {last_seen_str}")
+                    else:
+                        _LOGGER.info("No contacts found in device")
+                        
                     return contacts
                 else:
                     _LOGGER.warning("No contacts found or invalid contacts format")
@@ -331,6 +378,123 @@ class MeshCoreAPI:
         # Skipping status requests due to device issues
         _LOGGER.debug("Status requests are disabled to avoid device issues")
         return {}  # Return empty status results
+        
+    async def login_to_repeater(self, repeater_name: str, password: str) -> bool:
+        """Login to a specific repeater using its name and password."""
+        if not self._connected or not self._mesh_core:
+            _LOGGER.error("Not connected to MeshCore device")
+            return False
+            
+        async with self._device_lock:
+            try:
+                # Find the repeater in contacts
+                repeater_found = False
+                repeater_key = None
+                
+                # First ensure we have contacts
+                if not self._cached_contacts:
+                    # Get contacts if we don't have them cached
+                    _LOGGER.info(f"No cached contacts, fetching contacts before login to {repeater_name}")
+                    self._cached_contacts = await self.get_contacts()
+                
+                # Log the cached contacts for debugging
+                _LOGGER.info(f"Cached contacts: {list(self._cached_contacts.keys())}")
+                
+                # Look for the repeater by name
+                for name, contact in self._cached_contacts.items():
+                    _LOGGER.debug(f"Checking contact: {name}, type: {contact.get('type')}")
+                    if name == repeater_name:
+                        repeater_found = True
+                        # IMPORTANT: Use the full public key as in the CLI code
+                        repeater_key = bytes.fromhex(contact["public_key"])
+                        _LOGGER.info(f"Found repeater {repeater_name} with key: {repeater_key.hex()}")
+                        break
+                
+                if not repeater_found or not repeater_key:
+                    _LOGGER.error(f"Repeater {repeater_name} not found in contacts")
+                    return False
+                
+                # Send login command
+                _LOGGER.info(f"Logging into repeater {repeater_name} with password: {'guest login' if not password else '****'}")
+                # Handle empty password as guest login
+                send_result = await self._mesh_core.send_login(repeater_key, password if password else "")
+                _LOGGER.info(f"Login command result: {send_result}")
+                
+                # Send_login returns True on success, which may be all we need
+                # Some repeaters respond directly to the login command without sending a notification
+                if send_result is True:
+                    _LOGGER.info(f"Login command to repeater {repeater_name} succeeded directly")
+                    return True
+                    
+                # If direct response wasn't success, try waiting for a notification
+                _LOGGER.info(f"Waiting for login notification from repeater {repeater_name}")
+                login_success = await self._mesh_core.wait_login(timeout=5)
+                
+                if login_success:
+                    _LOGGER.info(f"Successfully logged into repeater {repeater_name}")
+                    return True
+                else:
+                    _LOGGER.error(f"Failed to login to repeater {repeater_name}, timeout or login denied")
+                    return False
+                    
+            except Exception as ex:
+                _LOGGER.error(f"Error logging into repeater: {ex}")
+                _LOGGER.exception("Detailed exception")
+                return False
+    
+    async def get_repeater_stats(self, repeater_name: str) -> Dict[str, Any]:
+        """Get stats from a repeater after login."""
+        if not self._connected or not self._mesh_core:
+            _LOGGER.error("Not connected to MeshCore device")
+            return {}
+            
+        async with self._device_lock:
+            try:
+                # Find the repeater in contacts
+                repeater_found = False
+                repeater_key = None
+                
+                # First ensure we have contacts
+                if not self._cached_contacts:
+                    # Get contacts if we don't have them cached
+                    _LOGGER.info(f"No cached contacts, fetching contacts before getting stats for {repeater_name}")
+                    self._cached_contacts = await self.get_contacts()
+                
+                # Log the cached contacts for debugging
+                _LOGGER.info(f"Cached contacts for stats: {list(self._cached_contacts.keys())}")
+                
+                # Look for the repeater by name
+                for name, contact in self._cached_contacts.items():
+                    if name == repeater_name:
+                        repeater_found = True
+                        # IMPORTANT: Use the full public key as in the CLI code
+                        repeater_key = bytes.fromhex(contact["public_key"])
+                        _LOGGER.info(f"Found repeater {repeater_name} with key: {repeater_key.hex()} for stats")
+                        break
+                
+                if not repeater_found or not repeater_key:
+                    _LOGGER.error(f"Repeater {repeater_name} not found in contacts for stats")
+                    return {}
+                
+                # Send status request
+                _LOGGER.info(f"Requesting stats from repeater {repeater_name}")
+                await self._mesh_core.send_statusreq(repeater_key)
+                
+                # Wait for status response
+                _LOGGER.info(f"Waiting for stats response from repeater {repeater_name}")
+                status = await self._mesh_core.wait_status(timeout=5)
+                
+                if status:
+                    _LOGGER.info(f"Received stats from repeater {repeater_name}: {status}")
+                    return status
+                else:
+                    _LOGGER.warning(f"No stats received from repeater {repeater_name} - timeout waiting for status")
+                    return {}
+                    
+            except Exception as ex:
+                _LOGGER.error(f"Error getting repeater stats: {ex}")
+                _LOGGER.exception("Detailed exception for stats")
+                return {}
     
     async def send_message(self, node_name: str, message: str) -> bool:
         """Send message to a specific node by name."""

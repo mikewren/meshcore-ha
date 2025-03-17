@@ -5,8 +5,10 @@
     },
     "error": {
       "cannot_connect": "Failed to connect",
-      "unknown": "Unexpected error"
+      "unknown": "Unexpected error",
+      "already_configured": "Repeater is already configured"
     },
+    "title": "MeshCore",
     "step": {
       "user": {
         "data": {
@@ -40,6 +42,24 @@
         },
         "description": "Enter the network details for your MeshCore TCP server",
         "title": "MeshCore TCP Setup"
+      },
+      "init": {
+        "data": {
+          "scan_interval": "Node & Message Polling Interval (seconds)",
+          "action": "Action",
+          "repeater_to_remove": "Select Repeater to Remove"
+        },
+        "description": "Configure MeshCore Integration. Current repeaters: {repeaters}",
+        "title": "MeshCore Options"
+      },
+      "add_repeater": {
+        "data": {
+          "repeater_name": "Repeater Name",
+          "repeater_password": "Password (leave empty for guest login)",
+          "repeater_update_interval": "Repeater Stats Update Interval (seconds)"
+        },
+        "description": "Select a repeater from your contacts list to monitor",
+        "title": "Add Repeater Subscription"
       }
     }
   },
